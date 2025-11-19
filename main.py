@@ -252,6 +252,116 @@ async def create_ticket(payload: Ticket):
     return {"id": _id}
 
 
+# -----------------------------
+# Demo data seeding for executives, team leads, and employees
+# -----------------------------
+
+def _find_one(collection: str, filter_dict: dict):
+    docs = get_documents(collection, filter_dict=filter_dict, limit=1)
+    return docs[0] if docs else None
+
+
+def _get_or_create_user(name: str, email: str, role: str, department: Optional[str] = None) -> str:
+    existing = _find_one("user", {"email": email})
+    if existing:
+        return str(existing.get("_id"))
+    user = User(name=name, email=email, role=role, department=department)
+    return create_document("user", user)
+
+
+def _ensure_employee(user_id: str, employee_id: str, title: str, manager_id: Optional[str] = None, team: Optional[str] = None, location: Optional[str] = None, salary: Optional[float] = None) -> str:
+    existing = _find_one("employee", {"user_id": user_id})
+    if existing:
+        return str(existing.get("_id"))
+    emp = Employee(
+        user_id=user_id,
+        employee_id=employee_id,
+        title=title,
+        manager_id=manager_id,
+        team=team,
+        location=location,
+        salary=salary,
+    )
+    return create_document("employee", emp)
+
+
+def _ensure_team(name: str, lead_user_id: Optional[str], member_user_ids: list[str]) -> str:
+    existing = _find_one("team", {"name": name})
+    if existing:
+        return str(existing.get("_id"))
+    team = Team(name=name, lead_user_id=lead_user_id, members=member_user_ids)
+    return create_document("team", team)
+
+
+def seed_demo_data() -> dict:
+    created = {"users": 0, "employees": 0, "teams": 0}
+
+    # Executives
+    ceo_id = _get_or_create_user("Ava Patel", "ava.patel@demo.co", "executive", department="Executive")
+    vpops_id = _get_or_create_user("Liam Chen", "liam.chen@demo.co", "executive", department="Executive")
+
+    # Team Leads
+    eng_lead_uid = _get_or_create_user("Maya Ross", "maya.ross@demo.co", "team_lead", department="Engineering")
+    design_lead_uid = _get_or_create_user("Noah Green", "noah.green@demo.co", "team_lead", department="Design")
+
+    # Employees - Engineering
+    emma_uid = _get_or_create_user("Emma Johnson", "emma.johnson@demo.co", "employee", department="Engineering")
+    oliver_uid = _get_or_create_user("Oliver Smith", "oliver.smith@demo.co", "employee", department="Engineering")
+    sophia_uid = _get_or_create_user("Sophia Davis", "sophia.davis@demo.co", "employee", department="Engineering")
+
+    # Employees - Design
+    jack_uid = _get_or_create_user("Jack Wilson", "jack.wilson@demo.co", "employee", department="Design")
+    mia_uid = _get_or_create_user("Mia Thompson", "mia.thompson@demo.co", "employee", department="Design")
+
+    # Ensure Employee records with titles and relationships
+    _ensure_employee(ceo_id, "EMP1001", "Chief Executive Officer", manager_id=None, team="Executive", location="NYC", salary=300000)
+    _ensure_employee(vpops_id, "EMP1002", "VP, Operations", manager_id=ceo_id, team="Executive", location="NYC", salary=220000)
+
+    _ensure_employee(eng_lead_uid, "EMP2001", "Engineering Lead", manager_id=vpops_id, team="Engineering", location="Remote", salary=180000)
+    _ensure_employee(design_lead_uid, "EMP3001", "Design Lead", manager_id=vpops_id, team="Design", location="Remote", salary=170000)
+
+    _ensure_employee(emma_uid, "EMP2002", "Senior Software Engineer", manager_id=eng_lead_uid, team="Engineering", location="Remote", salary=150000)
+    _ensure_employee(oliver_uid, "EMP2003", "Software Engineer", manager_id=eng_lead_uid, team="Engineering", location="Remote", salary=130000)
+    _ensure_employee(sophia_uid, "EMP2004", "QA Engineer", manager_id=eng_lead_uid, team="Engineering", location="Remote", salary=120000)
+
+    _ensure_employee(jack_uid, "EMP3002", "Product Designer", manager_id=design_lead_uid, team="Design", location="Remote", salary=125000)
+    _ensure_employee(mia_uid, "EMP3003", "UX Researcher", manager_id=design_lead_uid, team="Design", location="Remote", salary=115000)
+
+    # Teams with leads and members
+    _ensure_team("Engineering", lead_user_id=eng_lead_uid, member_user_ids=[eng_lead_uid, emma_uid, oliver_uid, sophia_uid])
+    _ensure_team("Design", lead_user_id=design_lead_uid, member_user_ids=[design_lead_uid, jack_uid, mia_uid])
+    _ensure_team("Executive", lead_user_id=ceo_id, member_user_ids=[ceo_id, vpops_id])
+
+    return {
+        "executives": [ceo_id, vpops_id],
+        "team_leads": [eng_lead_uid, design_lead_uid],
+        "employees": [emma_uid, oliver_uid, sophia_uid, jack_uid, mia_uid],
+        "teams": ["Engineering", "Design", "Executive"],
+    }
+
+
+@app.post("/api/seed/demo")
+async def seed_demo_endpoint():
+    if db is None:
+        raise HTTPException(status_code=500, detail="Database not available; set DATABASE_URL and DATABASE_NAME")
+    result = seed_demo_data()
+    return {"status": "ok", "created": result}
+
+
+# Seed on startup if empty (no users)
+@app.on_event("startup")
+def _auto_seed_if_empty():
+    try:
+        if db is None:
+            return
+        existing_users = get_documents("user", limit=1)
+        if not existing_users:
+            seed_demo_data()
+    except Exception:
+        # Avoid crashing startup if seeding fails
+        pass
+
+
 if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", 8000))
